@@ -1,0 +1,21 @@
+{
+  "name": "@pdwkend/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared fare/itinerary contracts. Enforces live-fetch and fee-inclusion rules in code.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

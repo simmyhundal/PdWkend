@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "pdwkend-rail": {
+      "command": "node",
+      "args": ["/Users/simmyhundal/code/pdwkend/mcp-servers/rail-fares/dist/server.js"]
+    },
+    "pdwkend-flights": {
+      "command": "node",
+      "args": ["/Users/simmyhundal/code/pdwkend/mcp-servers/flight-fares/dist/server.js"]
+    },
+    "pdwkend-sheets": {
+      "command": "node",
+      "args": ["/Users/simmyhundal/code/pdwkend/mcp-servers/sheets-writer/dist/server.js"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/absolute/path/to/pdwkend-service-account.json"
+      }
+    }
+  }
+}

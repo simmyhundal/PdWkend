@@ -1,0 +1,27 @@
+{
+  "name": "pdwkend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Paddy Weekend \u2014 multi-city trip planning with real, bookable prices.",
+  "workspaces": [
+    "packages/*",
+    "mcp-servers/*"
+  ],
+  "engines": {
+    "node": ">=20.10"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "typecheck": "tsc --build --dry",
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest",
+    "test:fast": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
