@@ -12,6 +12,13 @@ import {
   type FareQuote,
 } from "@pdwkend/contracts";
 import { BrowserPool, orderSources, type FareQuery, type FareSource } from "@pdwkend/sources";
+import {
+  AWARD_CABINS,
+  AWARD_CHECK_GUIDANCE,
+  AWARD_PROGRAMS,
+  buildAwardCheckLinks,
+  renderAwardCheckTable,
+} from "./src/award_links.js";
 import { GoogleFlightsSource } from "./src/google_flights.js";
 
 const log = (msg: string) => process.stderr.write(`[flight-fares] ${msg}\n`);
@@ -103,6 +110,56 @@ server.registerTool(
     return {
       content: [{ type: "text" as const, text }],
       structuredContent: { quotes: curated, total_found: quotes.length, unavailable },
+    };
+  },
+);
+
+server.registerTool(
+  "build_award_check_links",
+  {
+    title: "Links to check live award (points) prices",
+    description:
+      "Build links to each loyalty program's own award search (Flying Blue, United, Delta, " +
+      "American, Alaska) so the user can check the live points cost of a flight themselves. This " +
+      "tool does NOT fetch any points price and none is available from this server — never state, " +
+      "estimate or recall a points cost; ask the user to open the links and tell you what they " +
+      "see. Pass the flight from a search_flight_fares result in `flight` so the user knows which " +
+      "one to look for. Present the returned table and guidance as-is. Instant; no network.",
+    inputSchema: {
+      origin: z.string().describe("Origin city or airport, e.g. 'London' or 'LHR'."),
+      destination: z.string().describe("Destination city or airport, e.g. 'New York' or 'JFK'."),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Departure date, YYYY-MM-DD."),
+      adults: z.number().int().min(1).max(9).default(1),
+      cabin: z.enum(AWARD_CABINS).default("economy"),
+      programs: z.array(z.enum(AWARD_PROGRAMS)).optional().describe("Limit to these programs; default is all."),
+      flight: z
+        .string()
+        .optional()
+        .describe("The specific flight to look for, e.g. 'KLM KL1070 09:30'. Shown to the user only."),
+    },
+  },
+  async (args) => {
+    const links = buildAwardCheckLinks(
+      {
+        origin: args.origin,
+        destination: args.destination,
+        date: args.date,
+        adults: args.adults ?? 1,
+        cabin: args.cabin ?? "economy",
+      },
+      args.programs,
+    );
+    const text = [
+      args.flight ? `Look for: **${args.flight}** on ${args.date}.` : "",
+      renderAwardCheckTable(links),
+      AWARD_CHECK_GUIDANCE,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    return {
+      content: [{ type: "text" as const, text }],
+      structuredContent: { links, price_fetched: false },
     };
   },
 );
