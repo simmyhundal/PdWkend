@@ -48,7 +48,7 @@ export interface AwardCheckLink {
 }
 
 const LANDING: Record<AwardProgram, string> = {
-  flying_blue: "https://www.flyingblue.com/en/spend/flights",
+  flying_blue: "https://www.klm.com/search/advanced",
   united: "https://www.united.com/en/us/book-flight/united-awards",
   delta: "https://www.delta.com/flight-search/book-a-flight",
   american: "https://www.aa.com/booking/find-flights",
@@ -76,6 +76,9 @@ function enterText(q: AwardCheckQuery): string {
 }
 
 const BUILDERS: Record<AwardProgram, (q: AwardCheckQuery) => { url: string; prefill: PrefillStatus }> = {
+  // KLM's advanced search page (Flying Blue miles are spent on klm.com / airfrance.com).
+  // Cannot be deep-linked: after a search the results URL is a bare
+  // https://www.klm.com/search/flights/0 and the query lives in the session.
   flying_blue: () => ({ url: LANDING.flying_blue, prefill: "none" }),
   delta: () => ({ url: LANDING.delta, prefill: "none" }),
   american: () => ({ url: LANDING.american, prefill: "none" }),
@@ -127,7 +130,12 @@ export function buildAwardCheckLinks(
       label: PROGRAM_LABELS[program],
       url,
       prefill,
-      enter: enterText(query) + (program === "alaska" ? `. ${ALASKA_CABIN_NOTE}` : ""),
+      enter:
+        enterText(query) +
+        (program === "alaska" ? `. ${ALASKA_CABIN_NOTE}` : "") +
+        (program === "flying_blue"
+          ? ". Log in to your Flying Blue account on KLM first, then switch on \"Book with my … Miles\" before searching. Results show miles + cash per person, and the date strip lets you compare nearby days"
+          : ""),
     };
   });
 }

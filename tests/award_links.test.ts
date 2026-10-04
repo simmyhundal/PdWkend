@@ -59,6 +59,14 @@ describe("buildAwardCheckLinks", () => {
     expect(new URL(l!.url).searchParams.get("D")).toBe("São Paulo");
   });
 
+  it("gives flying blue as search-page-only, with login and miles guidance", () => {
+    const [l] = buildAwardCheckLinks(q, ["flying_blue"]);
+    expect(l!.prefill).toBe("none");
+    expect(l!.url).not.toContain("?");
+    expect(l!.url).toBe("https://www.klm.com/search/advanced");
+    expect(l!.enter).toContain("Book with my");
+  });
+
   it("marks unknown-prefill programs as search-page-only and lists what to enter", () => {
     const [l] = buildAwardCheckLinks(q, ["flying_blue"]);
     expect(l!.prefill).toBe("none");
