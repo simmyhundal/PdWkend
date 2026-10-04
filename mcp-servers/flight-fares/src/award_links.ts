@@ -89,9 +89,16 @@ const BUILDERS: Record<AwardProgram, (q: AwardCheckQuery) => { url: string; pref
       px: String(q.adults),
       taxng: "1",
       clm: UNITED_CABIN[q.cabin],
-      tqp: "A",
+      // tqp=R with mm=1 is the "Money + Miles" search (confirmed in a browser for
+      // economy, one way). tqp=A did not switch the results to miles.
+      tqp: "R",
+      mm: "1",
     });
-    return { url: `https://www.united.com/en/us/fsr/choose-flights?${params}`, prefill: "unverified" };
+    // Only the economy mapping has been checked; other cabins' sc/clm codes are guesses.
+    return {
+      url: `https://www.united.com/en/us/fsr/choose-flights?${params}`,
+      prefill: q.cabin === "economy" ? "verified" : "unverified",
+    };
   },
   alaska: (q) => {
     const params = new URLSearchParams({
@@ -104,7 +111,8 @@ const BUILDERS: Record<AwardProgram, (q: AwardCheckQuery) => { url: string; pref
       RT: "false",
       ShoppingMethod: "onlineaward",
     });
-    return { url: `https://www.alaskaair.com/search/results?${params}`, prefill: "unverified" };
+    // Confirmed in a browser: lands on a one-way award search (cabin is chosen on the results page).
+    return { url: `https://www.alaskaair.com/search/results?${params}`, prefill: "verified" };
   },
 };
 

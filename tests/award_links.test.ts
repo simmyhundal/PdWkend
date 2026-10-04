@@ -23,13 +23,34 @@ describe("buildAwardCheckLinks", () => {
     expect(buildAwardCheckLinks(q, ["united"]).map((l) => l.program)).toEqual(["united"]);
   });
 
-  it("prefills united with codes, date, party and the award flag", () => {
+  it("prefills united with codes, date, party and the money+miles flag", () => {
     const url = new URL(buildAwardCheckLinks(q, ["united"])[0]!.url);
     expect(url.searchParams.get("f")).toBe("LHR");
     expect(url.searchParams.get("t")).toBe("JFK");
     expect(url.searchParams.get("d")).toBe("2026-12-01");
     expect(url.searchParams.get("px")).toBe("2");
-    expect(url.searchParams.get("tqp")).toBe("A");
+    expect(url.searchParams.get("mm")).toBe("1");
+  });
+
+  it("builds the browser-confirmed united economy URL for SFO-ATL on 2027-01-01", () => {
+    const [l] = buildAwardCheckLinks(
+      { origin: "SFO", destination: "ATL", date: "2027-01-01", adults: 1, cabin: "economy" },
+      ["united"],
+    );
+    const got = new URL(l!.url);
+    // Parameter set copied from a working united.com money+miles results URL.
+    const confirmed = new URL(
+      "https://www.united.com/en/us/fsr/choose-flights?tt=1&st=bestmatches&d=2027-01-01&clm=7&taxng=1&f=SFO&px=1&sc=7&tqp=R&t=ATL&mm=1",
+    );
+    expect(got.origin + got.pathname).toBe(confirmed.origin + confirmed.pathname);
+    for (const key of ["tt", "d", "clm", "taxng", "f", "px", "sc", "tqp", "t", "mm"]) {
+      expect(got.searchParams.get(key), key).toBe(confirmed.searchParams.get(key));
+    }
+    expect(l!.prefill).toBe("verified");
+  });
+
+  it("keeps united non-economy cabins unverified", () => {
+    expect(buildAwardCheckLinks(q, ["united"])[0]!.prefill).toBe("unverified");
   });
 
   it("url-encodes free-text places", () => {
@@ -46,8 +67,21 @@ describe("buildAwardCheckLinks", () => {
     expect(l!.enter).toContain("business");
   });
 
-  it("never claims an unconfirmed link format is verified", () => {
-    for (const l of buildAwardCheckLinks(q)) expect(l.prefill).not.toBe("verified");
+  it("builds the browser-confirmed alaska URL for SFO-ATL on 2027-01-01", () => {
+    const [l] = buildAwardCheckLinks(
+      { origin: "SFO", destination: "ATL", date: "2027-01-01", adults: 1, cabin: "economy" },
+      ["alaska"],
+    );
+    expect(l!.url).toBe(
+      "https://www.alaskaair.com/search/results?A=1&C=0&L=0&O=SFO&D=ATL&OD=2027-01-01&RT=false&ShoppingMethod=onlineaward",
+    );
+    expect(l!.prefill).toBe("verified");
+  });
+
+  it("does not claim verification for programs that haven't been checked", () => {
+    for (const l of buildAwardCheckLinks(q, ["delta", "american", "flying_blue"])) {
+      expect(l.prefill).not.toBe("verified");
+    }
   });
 
   it("renders a table and contains no points figures", () => {
