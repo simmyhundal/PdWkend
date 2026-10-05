@@ -34,17 +34,25 @@ const CONSENT_SELECTORS = [
 
 const SYMBOL_TO_CURRENCY: Record<string, string> = { "€": "EUR", "£": "GBP", $: "USD", "₹": "INR", "¥": "JPY" };
 
+/** Project default; callers can override per search with `FareQuery.currency`. */
+export const DEFAULT_CURRENCY = "USD";
+
+/** Currencies that share the "$" symbol, so the symbol alone can't identify them. */
+const DOLLAR_CURRENCIES = new Set(["USD", "CAD", "AUD", "NZD", "SGD", "HKD", "MXN", "CLP", "COP", "ARS"]);
+
 export function buildFlightsUrl(query: FareQuery): string {
   // The natural-language `q` form is the documented human-facing entry point and
   // lets Google resolve "Paris" or "CDG" itself, so we don't need an airport table.
   const q = `Flights to ${query.destination} from ${query.origin} on ${query.date} oneway`;
-  const params = new URLSearchParams({ q, hl: "en", curr: "GBP" });
+  const params = new URLSearchParams({ q, hl: "en", curr: (query.currency ?? DEFAULT_CURRENCY).toUpperCase() });
   return `https://www.google.com/travel/flights?${params.toString()}`;
 }
 
 export interface ParsedRow {
   departTime: string;
   arriveTime: string;
+  /** Days after departure that the flight lands (the "+1" on an overnight arrival). */
+  arriveDayOffset: number;
   airline: string;
   durationMinutes: number;
   originCode?: string;
@@ -55,10 +63,12 @@ export interface ParsedRow {
 }
 
 /** Exported for tests — this is the fragile part, so it's tested in isolation. */
-export function parseFlightRow(text: string): ParsedRow | undefined {
+export function parseFlightRow(text: string, expectedCurrency?: string): ParsedRow | undefined {
   const clean = text.replace(/\s+/g, " ").trim();
 
-  const times = clean.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*[–—-]\s*(\d{1,2}:\d{2}\s*[AP]M)/i);
+  // An overnight arrival carries a "+1" straight after the time; it has to be consumed
+  // here or it leaks into the carrier text below.
+  const times = clean.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*[–—-]\s*(\d{1,2}:\d{2}\s*[AP]M)(?:\s*\+\s*(\d))?/i);
   if (!times) return undefined;
 
   // The first duration is the journey; a connecting itinerary lists the layover
@@ -74,7 +84,12 @@ export function parseFlightRow(text: string): ParsedRow | undefined {
   const priceMatches = [...clean.matchAll(/([£€$₹¥])\s?([\d,]+)(?:\.(\d{2}))?/g)];
   const price = priceMatches.at(-1);
   if (!price) return undefined;
-  const currency = SYMBOL_TO_CURRENCY[price[1] ?? ""] ?? "GBP";
+  const symbolCurrency = SYMBOL_TO_CURRENCY[price[1] ?? ""] ?? "GBP";
+  // "$" is shared by many currencies. When we asked for one of them, the page is
+  // showing that one; otherwise a CAD fare would be mislabelled as USD.
+  const wanted = expectedCurrency?.toUpperCase();
+  const currency =
+    price[1] === "$" && wanted && DOLLAR_CURRENCIES.has(wanted) ? wanted : symbolCurrency;
   const whole = Number((price[2] ?? "0").replace(/,/g, ""));
   const cents = Number(price[3] ?? 0);
   const priceMinor = whole * 100 + cents;
@@ -94,6 +109,7 @@ export function parseFlightRow(text: string): ParsedRow | undefined {
   return {
     departTime: normaliseTime(times[1] ?? ""),
     arriveTime: normaliseTime(times[2] ?? ""),
+    arriveDayOffset: Number(times[3] ?? 0),
     airline,
     durationMinutes,
     originCode: route?.[1],
@@ -131,7 +147,14 @@ export function splitCarriers(raw: string): string {
   });
 
   text = text
+    // A masked brand glued to a neighbouring carrier ("easyJetLATAM") has no case
+    // boundary to split on, so cut at the sentinel's edges instead.
+    .replace(/([A-Za-z])(~~\d+~~)/g, "$1, $2")
+    .replace(/(~~\d+~~)([A-Za-z])/g, "$1, $2")
     .replace(/([a-z])([A-Z])/g, "$1, $2")
+    // An all-caps carrier glued to a capitalised one ("LATAMDelta"): split between the
+    // caps run and the last capital, which starts the next name.
+    .replace(/([A-Z]{2,})([A-Z][a-z])/g, "$1, $2")
     .replace(/\s*,\s*,+/g, ",")
     .replace(/[,·]+$/, "")
     .trim();
@@ -189,6 +212,7 @@ export class GoogleFlightsSource implements FareSource {
 
   async fetch(query: FareQuery, ctx: FetchContext): Promise<FareQuote[]> {
     const url = buildFlightsUrl(query);
+    const requestedCurrency = (query.currency ?? DEFAULT_CURRENCY).toUpperCase();
     ctx.log(`google-flights: ${query.origin} → ${query.destination} on ${query.date}`);
 
     return withPage(ctx.browser, this.id, url, async (page) => {
@@ -220,7 +244,7 @@ export class GoogleFlightsSource implements FareSource {
       const seen = new Set<string>();
       const quotes: FareQuote[] = [];
       for (const text of texts) {
-        const row = parseFlightRow(text);
+        const row = parseFlightRow(text, query.currency ?? DEFAULT_CURRENCY);
         if (!row) continue;
         if (!withinWindow(row.departTime, query)) continue;
 
@@ -246,11 +270,14 @@ export class GoogleFlightsSource implements FareSource {
             source_type: this.sourceType,
             source_url: url,
             depart_at: `${query.date}T${row.departTime}`,
-            arrive_at: `${query.date}T${row.arriveTime}`,
+            arrive_at: `${addDays(query.date, row.arriveDayOffset)}T${row.arriveTime}`,
             duration_minutes: row.durationMinutes,
             changes: row.stops,
             caveats: [
               "Book on the airline's own site — confirm the total including bags at checkout.",
+              ...(row.currency !== requestedCurrency
+                ? [`Google showed this fare in ${row.currency}, not the requested ${requestedCurrency}.`]
+                : []),
             ],
           }),
         );
@@ -265,6 +292,14 @@ export class GoogleFlightsSource implements FareSource {
       return quotes;
     });
   }
+}
+
+/** YYYY-MM-DD plus whole days, in UTC so DST can't shift the date. */
+export function addDays(date: string, days: number): string {
+  if (!days) return date;
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function withinWindow(departure: string, query: FareQuery): boolean {

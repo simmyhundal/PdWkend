@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDays,
   buildFlightsUrl,
   parseFlightRow,
   splitCarriers,
@@ -107,6 +108,12 @@ describe("splitCarriers", () => {
     ["Air France", "Air France"],
     ["British Airways", "British Airways"],
     ["VuelingIberia", "Vueling, Iberia"],
+    ["LATAMDelta", "LATAM, Delta"],
+    ["COPAUnited", "COPA, United"],
+    ["Delta, LATAM", "Delta, LATAM"],
+    ["LATAM Airlines", "LATAM Airlines"],
+    ["SAS", "SAS"],
+    ["easyJetLATAM", "easyJet, LATAM"],
   ])("%s → %s", (input, expected) => {
     expect(splitCarriers(input)).toBe(expected);
   });
@@ -119,5 +126,87 @@ describe("buildFlightsUrl", () => {
     // URLSearchParams encodes spaces as "+", which only the query parser undoes.
     const q = new URL(url).searchParams.get("q");
     expect(q).toBe("Flights to Paris from London on 2026-09-05 oneway");
+  });
+});
+
+describe("overnight arrivals", () => {
+  it("reads the +1 day marker and keeps it out of the carrier name", () => {
+    const r = parseFlightRow("9:28 PM – 5:07 AM+1 Delta 4 hr 39 min SFO–ATL Nonstop 174 kg CO2e $224")!;
+    expect(r.arriveDayOffset).toBe(1);
+    expect(r.arriveTime).toBe("05:07");
+    expect(r.airline).toBe("Delta");
+  });
+
+  it("tolerates whitespace around the marker", () => {
+    const r = parseFlightRow("7:05 PM – 6:40 AM +1 Delta 9 hr 35 min ATL–SCL Nonstop $1,100")!;
+    expect(r.arriveDayOffset).toBe(1);
+    expect(r.airline).toBe("Delta");
+  });
+
+  it("is zero for a same-day arrival", () => {
+    expect(parseFlightRow(REAL_ROWS.nonstop)!.arriveDayOffset).toBe(0);
+  });
+});
+
+describe("addDays", () => {
+  it.each([
+    ["2027-01-01", 0, "2027-01-01"],
+    ["2027-01-01", 1, "2027-01-02"],
+    ["2026-12-31", 1, "2027-01-01"],
+    ["2027-02-28", 1, "2027-03-01"],
+    ["2026-03-28", 2, "2026-03-30"],
+  ])("%s + %i days = %s", (date, days, expected) => {
+    expect(addDays(date, days)).toBe(expected);
+  });
+});
+
+describe("pricing currency", () => {
+  const base = { origin: "SFO", destination: "ATL", date: "2027-01-01", adults: 1 };
+
+  it("defaults the search to USD", () => {
+    expect(new URL(buildFlightsUrl(base)).searchParams.get("curr")).toBe("USD");
+  });
+
+  it("honours a requested currency, case-insensitively", () => {
+    expect(new URL(buildFlightsUrl({ ...base, currency: "gbp" })).searchParams.get("curr")).toBe("GBP");
+  });
+
+  it("labels a $ fare with the requested dollar currency", () => {
+    const row = "4:30 PM – 6:50 PM Air Canada 5 hr 20 min SFO–YYZ Nonstop $412";
+    expect(parseFlightRow(row, "CAD")!.currency).toBe("CAD");
+    expect(parseFlightRow(row, "USD")!.currency).toBe("USD");
+  });
+
+  it("does not relabel a non-dollar symbol to the requested currency", () => {
+    const row = "4:30 PM – 6:50 PM easyJet 1 hr 20 min LGW–CDG Nonstop £38";
+    expect(parseFlightRow(row, "USD")!.currency).toBe("GBP");
+  });
+});
+
+describe("ATL–SCL overnight rows (captured 2026-10-04, before the +1 fix)", () => {
+  // The live run reported operators "+1 Delta, LATAM" and "+1 United, COPA", so the
+  // marker follows the arrival time directly. Prices and CO2 are reconstructed.
+  const departing = "2026-12-31";
+
+  it("lands the nonstop on 1 Jan and names the carriers cleanly", () => {
+    const r = parseFlightRow("7:05 PM – 6:40 AM+1 Delta, LATAM 9 hr 35 min ATL–SCL Nonstop 331 kg CO2e $866")!;
+    expect(r.airline).toBe("Delta, LATAM");
+    expect(r.durationMinutes).toBe(575);
+    expect(addDays(departing, r.arriveDayOffset)).toBe("2027-01-01");
+  });
+
+  it("handles the 2-stop that leaves in the morning and still lands next day", () => {
+    const r = parseFlightRow("7:00 AM – 2:53 AM+1 United, COPA 17 hr 53 min ATL–SCL 2 stops 540 kg CO2e $1,071")!;
+    expect(r.airline).toBe("United, COPA");
+    expect(r.stops).toBe(2);
+    expect(r.arriveDayOffset).toBe(1);
+  });
+});
+
+describe("all-caps carrier glued to the next", () => {
+  it("separates them in a full row, as seen on ATL–SCL", () => {
+    const r = parseFlightRow("10:15 PM – 3:00 PM+1 LATAMDelta 14 hr 45 min ATL–SCL 1 stop 3 hr ... GRU $1,100")!;
+    expect(r.airline).toBe("LATAM, Delta");
+    expect(r.arriveDayOffset).toBe(1);
   });
 });

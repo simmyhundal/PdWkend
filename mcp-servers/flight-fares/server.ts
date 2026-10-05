@@ -45,6 +45,11 @@ server.registerTool(
       destination: z.string().describe("Destination city or airport, e.g. 'Paris' or 'CDG'."),
       date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Departure date, YYYY-MM-DD."),
       adults: z.number().int().min(1).max(9).default(1),
+      currency: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .default("USD")
+        .describe("ISO-4217 currency to price in, e.g. 'USD' or 'GBP'. Use one currency across all legs of a trip so totals can be summed."),
       earliest_departure: z.string().regex(/^\d{2}:\d{2}$/).optional().describe("Earliest departure, HH:MM local."),
       latest_departure: z.string().regex(/^\d{2}:\d{2}$/).optional().describe("Latest departure, HH:MM local."),
     },
@@ -55,6 +60,7 @@ server.registerTool(
       destination: args.destination,
       date: args.date,
       adults: args.adults ?? 1,
+      currency: (args.currency ?? "USD").toUpperCase(),
       earliest_departure: args.earliest_departure,
       latest_departure: args.latest_departure,
     };
