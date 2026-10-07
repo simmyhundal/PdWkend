@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   addDays,
   buildFlightsUrl,
+  isResultRowText,
   parseFlightRow,
+  parseUnpricedRow,
   splitCarriers,
 } from "@pdwkend/flight-fares-mcp/src/google_flights.js";
+import { describeUnpriced, renderCoverageNotes } from "@pdwkend/flight-fares-mcp/src/coverage.js";
 
 /**
  * Row parsing is the most brittle code in the repo — it reads rendered text from
@@ -208,5 +211,79 @@ describe("all-caps carrier glued to the next", () => {
     const r = parseFlightRow("10:15 PM – 3:00 PM+1 LATAMDelta 14 hr 45 min ATL–SCL 1 stop 3 hr ... GRU $1,100")!;
     expect(r.airline).toBe("LATAM, Delta");
     expect(r.arriveDayOffset).toBe(1);
+  });
+});
+
+describe("unpriced rows (SCL–PNT, captured 2026-10-07, issue #5)", () => {
+  // Raw innerText from Google Flights, one-way SCL → PNT on 2027-01-02. Google lists
+  // the Sky Airline nonstop but won't price it one-way.
+  const ROWS = {
+    latam:
+      "5:03 AM – 8:21 AM LATAMOperated by Latam Airlines Group 3 hr 18 min SCL–PNT Nonstop 171 kg CO2e Avg emissions $140",
+    sky: "9:00 AM – 12:17 PM Sky Airline 3 hr 17 min SCL–PNT Nonstop 132 kg CO2e -23% emissions Price unavailable",
+  };
+
+  it("keeps an unpriced row instead of filtering it out before parsing", () => {
+    expect(isResultRowText(ROWS.sky)).toBe(true);
+    expect(isResultRowText(ROWS.latam)).toBe(true);
+  });
+
+  it("still ignores page text that isn't a result row", () => {
+    expect(isResultRowText("Prices are currently typical")).toBe(false);
+    expect(isResultRowText("Departing flights 9:00 AM")).toBe(false);
+  });
+
+  it("never turns an unpriced row into a fare", () => {
+    expect(parseFlightRow(ROWS.sky, "USD")).toBeUndefined();
+  });
+
+  it("reads the schedule of an unpriced row", () => {
+    const r = parseUnpricedRow(ROWS.sky)!;
+    expect(r.airline).toBe("Sky Airline");
+    expect(r.departTime).toBe("09:00");
+    expect(r.arriveTime).toBe("12:17");
+    expect(r.durationMinutes).toBe(197);
+    expect(r.stops).toBe(0);
+    expect(r.originCode).toBe("SCL");
+    expect(r.destinationCode).toBe("PNT");
+  });
+
+  it("doesn't report a priced row as unpriced", () => {
+    expect(parseUnpricedRow(ROWS.latam)).toBeUndefined();
+    expect(parseUnpricedRow("5:35 PM – 7:55 PM Air France 1 hr 20 min LHR–CDG Nonstop")).toBeUndefined();
+  });
+});
+
+describe("coverage notes", () => {
+  const sky = {
+    operator: "Sky Airline",
+    depart_at: "2027-01-02T09:00",
+    arrive_at: "2027-01-02T12:17",
+    duration_minutes: 197,
+    changes: 0,
+    reason: "price_not_shown" as const,
+    source_url: "https://www.google.com/travel/flights",
+  };
+
+  it("names unpriced departures and forbids estimating them", () => {
+    const [line] = renderCoverageNotes({ unpriced: [sky], skipped_rows: 0 });
+    expect(line).toContain("Sky Airline 09:00 → 12:17 (nonstop)");
+    expect(line).toContain("do not estimate");
+  });
+
+  it("marks an overnight arrival", () => {
+    expect(describeUnpriced({ ...sky, arrive_at: "2027-01-03T01:10", changes: 1 })).toBe(
+      "Sky Airline 09:00 → 01:10 +1 (1 stop)",
+    );
+  });
+
+  it("warns when rows were skipped", () => {
+    expect(renderCoverageNotes({ unpriced: [], skipped_rows: 2 })).toEqual([
+      "2 result rows couldn't be read, so this list may be incomplete.",
+    ]);
+  });
+
+  it("says nothing when the list is complete", () => {
+    expect(renderCoverageNotes({ unpriced: [], skipped_rows: 0 })).toEqual([]);
   });
 });

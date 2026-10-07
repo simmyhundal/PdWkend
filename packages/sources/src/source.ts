@@ -24,10 +24,38 @@ export interface FareQuery {
   latest_departure?: string;
 }
 
+/**
+ * A departure the source could see but not price. Schedule only, never a number.
+ *
+ * Reported so the agent can say "this flight exists but showed no price" instead
+ * of implying it doesn't run. Dropping these silently made a real Sky Airline
+ * nonstop vanish from an SCL–PNT search (issue #5).
+ */
+export interface UnpricedOption {
+  operator: string;
+  /** Local "YYYY-MM-DDTHH:MM", same shape as FareQuote.depart_at. */
+  depart_at: string;
+  arrive_at: string;
+  duration_minutes: number;
+  changes: number;
+  /** The page listed the departure without a price (e.g. Google's "Price unavailable"). */
+  reason: "price_not_shown";
+  source_url: string;
+}
+
+/** What a source saw besides its quotes, so a short list isn't mistaken for a complete one. */
+export interface FetchReport {
+  unpriced: UnpricedOption[];
+  /** Result rows that couldn't be read as a departure at all. */
+  skipped_rows: number;
+}
+
 export interface FetchContext {
   browser: BrowserPool;
   signal?: AbortSignal;
   log: (msg: string) => void;
+  /** Optional: sources that can see unpriced or unreadable rows report them here. */
+  report?: (report: FetchReport) => void;
 }
 
 export interface FareSource {

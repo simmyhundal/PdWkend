@@ -4,7 +4,14 @@ import {
   fromDecimal,
   type FareQuote,
 } from "@pdwkend/contracts";
-import { dismissConsent, withPage, type FareQuery, type FareSource, type FetchContext } from "@pdwkend/sources";
+import {
+  dismissConsent,
+  withPage,
+  type FareQuery,
+  type FareSource,
+  type FetchContext,
+  type UnpricedOption,
+} from "@pdwkend/sources";
 
 /**
  * Flights, read from Google Flights.
@@ -48,7 +55,8 @@ export function buildFlightsUrl(query: FareQuery): string {
   return `https://www.google.com/travel/flights?${params.toString()}`;
 }
 
-export interface ParsedRow {
+/** The schedule part of a row: everything except the price. */
+export interface ParsedSchedule {
   departTime: string;
   arriveTime: string;
   /** Days after departure that the flight lands (the "+1" on an overnight arrival). */
@@ -58,14 +66,30 @@ export interface ParsedRow {
   originCode?: string;
   destinationCode?: string;
   stops: number;
+}
+
+export interface ParsedRow extends ParsedSchedule {
   priceMinor: number;
   currency: string;
 }
 
-/** Exported for tests — this is the fragile part, so it's tested in isolation. */
-export function parseFlightRow(text: string, expectedCurrency?: string): ParsedRow | undefined {
-  const clean = text.replace(/\s+/g, " ").trim();
+const ROW_TIME = /\d{1,2}:\d{2}/;
+const ROW_PRICE = /[£€$]\s?\d/;
+/** Google's wording for a departure it lists but won't price (seen for Sky Airline one-way). */
+const ROW_UNPRICED = /price unavailable/i;
+const MONEY = /([£€$₹¥])\s?([\d,]+)(?:\.(\d{2}))?/g;
 
+/**
+ * Whether an `<li>`'s text is a result row worth parsing. Unpriced rows count:
+ * filtering on a price here is what made them vanish before parsing (issue #5).
+ */
+export function isResultRowText(text: string): boolean {
+  return (
+    text.length < 400 && ROW_TIME.test(text) && (ROW_PRICE.test(text) || ROW_UNPRICED.test(text))
+  );
+}
+
+function parseSchedule(clean: string): ParsedSchedule | undefined {
   // An overnight arrival carries a "+1" straight after the time; it has to be consumed
   // here or it leaks into the carrier text below.
   const times = clean.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*[–—-]\s*(\d{1,2}:\d{2}\s*[AP]M)(?:\s*\+\s*(\d))?/i);
@@ -79,21 +103,6 @@ export function parseFlightRow(text: string, expectedCurrency?: string): ParsedR
     ? Number(dur[1]) * 60 + Number(dur[2] ?? 0)
     : Number(dur[3] ?? 0);
   if (!durationMinutes) return undefined;
-
-  // Price sits at the end of the row; take the last money-shaped token.
-  const priceMatches = [...clean.matchAll(/([£€$₹¥])\s?([\d,]+)(?:\.(\d{2}))?/g)];
-  const price = priceMatches.at(-1);
-  if (!price) return undefined;
-  const symbolCurrency = SYMBOL_TO_CURRENCY[price[1] ?? ""] ?? "GBP";
-  // "$" is shared by many currencies. When we asked for one of them, the page is
-  // showing that one; otherwise a CAD fare would be mislabelled as USD.
-  const wanted = expectedCurrency?.toUpperCase();
-  const currency =
-    price[1] === "$" && wanted && DOLLAR_CURRENCIES.has(wanted) ? wanted : symbolCurrency;
-  const whole = Number((price[2] ?? "0").replace(/,/g, ""));
-  const cents = Number(price[3] ?? 0);
-  const priceMinor = whole * 100 + cents;
-  if (priceMinor <= 0) return undefined;
 
   const route = clean.match(/\b([A-Z]{3})[–—-]([A-Z]{3})\b/);
   const stopsMatch = clean.match(/Nonstop|(\d+)\s*stops?/i);
@@ -115,9 +124,42 @@ export function parseFlightRow(text: string, expectedCurrency?: string): ParsedR
     originCode: route?.[1],
     destinationCode: route?.[2],
     stops,
-    priceMinor,
-    currency,
   };
+}
+
+/**
+ * A row Google lists without a price. Returns the schedule only, never a number,
+ * and only when the row says so explicitly, so a priced row that merely failed to
+ * parse isn't passed off as "unpriced".
+ */
+export function parseUnpricedRow(text: string): ParsedSchedule | undefined {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!ROW_UNPRICED.test(clean) || [...clean.matchAll(MONEY)].length > 0) return undefined;
+  return parseSchedule(clean);
+}
+
+/** Exported for tests — this is the fragile part, so it's tested in isolation. */
+export function parseFlightRow(text: string, expectedCurrency?: string): ParsedRow | undefined {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const schedule = parseSchedule(clean);
+  if (!schedule) return undefined;
+
+  // Price sits at the end of the row; take the last money-shaped token.
+  const priceMatches = [...clean.matchAll(MONEY)];
+  const price = priceMatches.at(-1);
+  if (!price) return undefined;
+  const symbolCurrency = SYMBOL_TO_CURRENCY[price[1] ?? ""] ?? "GBP";
+  // "$" is shared by many currencies. When we asked for one of them, the page is
+  // showing that one; otherwise a CAD fare would be mislabelled as USD.
+  const wanted = expectedCurrency?.toUpperCase();
+  const currency =
+    price[1] === "$" && wanted && DOLLAR_CURRENCIES.has(wanted) ? wanted : symbolCurrency;
+  const whole = Number((price[2] ?? "0").replace(/,/g, ""));
+  const cents = Number(price[3] ?? 0);
+  const priceMinor = whole * 100 + cents;
+  if (priceMinor <= 0) return undefined;
+
+  return { ...schedule, priceMinor, currency };
 }
 
 /**
@@ -190,12 +232,13 @@ export class GoogleFlightsSource implements FareSource {
    * often cheaper) results.
    */
   async #readSettledRows(page: import("playwright").Page): Promise<string[]> {
+    // Filter in Node rather than in the page so the same predicate is unit-tested.
     const readRows = () =>
-      page.evaluate(() =>
-        [...document.querySelectorAll("li")]
-          .map((li) => (li as HTMLElement).innerText ?? "")
-          .filter((t) => t.length < 400 && /[£€$]\s?\d/.test(t) && /\d{1,2}:\d{2}/.test(t)),
-      );
+      page
+        .evaluate(() =>
+          [...document.querySelectorAll("li")].map((li) => (li as HTMLElement).innerText ?? ""),
+        )
+        .then((texts) => texts.filter(isResultRowText));
 
     const deadline = Date.now() + 25_000;
     let previous = -1;
@@ -243,9 +286,33 @@ export class GoogleFlightsSource implements FareSource {
 
       const seen = new Set<string>();
       const quotes: FareQuote[] = [];
+      const unpriced: UnpricedOption[] = [];
+      let skippedRows = 0;
       for (const text of texts) {
         const row = parseFlightRow(text, query.currency ?? DEFAULT_CURRENCY);
-        if (!row) continue;
+        if (!row) {
+          // Never drop a listed departure silently (issue #5): keep its schedule,
+          // with no price, or at least count it so the result isn't read as complete.
+          const sched = parseUnpricedRow(text);
+          if (!sched) {
+            skippedRows += 1;
+            continue;
+          }
+          if (!withinWindow(sched.departTime, query)) continue;
+          const key = `unpriced|${sched.airline}|${sched.departTime}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          unpriced.push({
+            operator: sched.airline,
+            depart_at: `${query.date}T${sched.departTime}`,
+            arrive_at: `${addDays(query.date, sched.arriveDayOffset)}T${sched.arriveTime}`,
+            duration_minutes: sched.durationMinutes,
+            changes: sched.stops,
+            reason: "price_not_shown",
+            source_url: url,
+          });
+          continue;
+        }
         if (!withinWindow(row.departTime, query)) continue;
 
         // Google repeats the same itinerary across its "best"/"cheapest" panels.
@@ -283,9 +350,13 @@ export class GoogleFlightsSource implements FareSource {
         );
       }
 
+      ctx.report?.({ unpriced, skipped_rows: skippedRows });
+
       if (quotes.length === 0) {
         throw new LiveFetchUnavailableError(
-          `Google Flights returned rows but none could be parsed into a fare for ${query.date}.`,
+          unpriced.length > 0
+            ? `Google Flights lists ${unpriced.length} departure(s) for ${query.date} but shows no one-way price for any of them.`
+            : `Google Flights returned rows but none could be parsed into a fare for ${query.date}.`,
           { source: "Google Flights", reason: "parse_failed", source_url: url },
         );
       }

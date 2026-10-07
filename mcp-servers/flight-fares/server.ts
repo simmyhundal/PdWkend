@@ -11,7 +11,13 @@ import {
   renderQuoteTable,
   type FareQuote,
 } from "@pdwkend/contracts";
-import { BrowserPool, orderSources, type FareQuery, type FareSource } from "@pdwkend/sources";
+import {
+  BrowserPool,
+  orderSources,
+  type FareQuery,
+  type FareSource,
+  type FetchReport,
+} from "@pdwkend/sources";
 import {
   AWARD_CABINS,
   AWARD_CHECK_GUIDANCE,
@@ -19,6 +25,7 @@ import {
   buildAwardCheckLinks,
   renderAwardCheckTable,
 } from "./src/award_links.js";
+import { emptyReport, mergeReport, renderCoverageNotes } from "./src/coverage.js";
 import { GoogleFlightsSource } from "./src/google_flights.js";
 
 const log = (msg: string) => process.stderr.write(`[flight-fares] ${msg}\n`);
@@ -39,7 +46,9 @@ server.registerTool(
       "airline's headline price and are labelled as excluding bags and seat selection, so they " +
       "display as 'before fees' rather than as a checkout total — keep that wording. For rail " +
       "routes inside Europe, prefer search_rail_fares: it reads the operator's own site and its " +
-      "totals are checkout-ready. Takes roughly 30s.",
+      "totals are checkout-ready. Departures Google lists without a one-way price come back in " +
+      "`unpriced` with times only: mention them and point the user to the airline's site, never " +
+      "estimate their fare. Takes roughly 30s.",
     inputSchema: {
       origin: z.string().describe("Origin city or airport, e.g. 'London' or 'LHR'."),
       destination: z.string().describe("Destination city or airport, e.g. 'Paris' or 'CDG'."),
@@ -67,11 +76,13 @@ server.registerTool(
 
     const quotes: FareQuote[] = [];
     const unavailable: string[] = [];
+    const coverage: FetchReport = emptyReport();
+    const report = (r: FetchReport) => mergeReport(coverage, r);
 
     for (const source of SOURCES) {
       if (!source.supports(query)) continue;
       try {
-        quotes.push(...(await source.fetch(query, { browser, log })));
+        quotes.push(...(await source.fetch(query, { browser, log, report })));
       } catch (err) {
         if (err instanceof LiveFetchUnavailableError) {
           unavailable.push(err.userMessage);
@@ -84,6 +95,11 @@ server.registerTool(
       }
     }
 
+    const coverageNotes = renderCoverageNotes(coverage);
+    if (coverage.skipped_rows > 0) {
+      unavailable.push(`Google Flights: ${coverage.skipped_rows} result row(s) couldn't be read.`);
+    }
+
     if (quotes.length === 0) {
       return {
         isError: true,
@@ -93,9 +109,11 @@ server.registerTool(
             text:
               `No live flight fare could be fetched for ${query.origin} → ${query.destination} on ${query.date}.\n` +
               unavailable.map((u) => `- ${u}`).join("\n") +
+              (coverageNotes.length ? `\n\n${coverageNotes.join("\n")}` : "") +
               `\n\nDo not substitute an estimated price. Report this to the user as-is.`,
           },
         ],
+        structuredContent: { quotes: [], total_found: 0, unavailable, unpriced: coverage.unpriced },
       };
     }
 
@@ -107,6 +125,7 @@ server.registerTool(
       renderQuoteTable(curated),
       pick ? `**Pick:** ${pick.operator} ${pick.fare_name} at ${formatMoney(pick.total_price)} (before bags)` : "",
       notes.length ? notes.map((n) => `- ${n}`).join("\n") : "",
+      coverageNotes.join("\n"),
       unavailable.length ? `Not priced: ${unavailable.join("; ")}` : "",
       `_${curated.length} of ${quotes.length} options shown; all fetched live just now._`,
     ]
@@ -115,7 +134,12 @@ server.registerTool(
 
     return {
       content: [{ type: "text" as const, text }],
-      structuredContent: { quotes: curated, total_found: quotes.length, unavailable },
+      structuredContent: {
+        quotes: curated,
+        total_found: quotes.length,
+        unavailable,
+        unpriced: coverage.unpriced,
+      },
     };
   },
 );
