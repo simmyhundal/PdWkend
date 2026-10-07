@@ -208,3 +208,62 @@ Ordered by how much time each would have saved in this session.
   doesn't know about catamarans or walk-in camps.
 - Per-viewer vs shared state for the trip page: should the meal plan be one shared
   decision or each person's own scenario?
+
+## Addendum: firm pricing (later on Oct 7)
+
+The user's main concern after the session: **fear of hallucinated availability and
+stale prices or estimates.** Two findings.
+
+### PdWkend's own flight tool wasn't used, and that is a dogfooding result in itself
+
+`search_flight_fares` was connected all session. The agent never called it and
+scraped Google Flights in the browser instead. Why:
+
+1. **A stale memory note.** On Oct 4 the agent saved "the pdwkend flight tool returns
+   GBP, so use Google Flights with `curr=USD` in the browser". Commit `ff74874` fixed
+   the currency default a few hours later. The note was never updated, and the agent
+   followed it without checking.
+2. **The agent didn't check which project tools it had.** Nothing in the session
+   prompted it to prefer the product's own tools over generic browsing.
+
+Result: every flight price on the trip page went out without `fetched_at`, which is
+exactly the failure the contracts package exists to prevent. Re-pricing with the tool
+later moved SCL→PUQ from $126 to $123 and PNT→SCL from $194 to $193.
+
+When it was used, it worked as designed: `fetched_at` and `session_id` on every
+quote, curated to 3–5 options, `fee_confidence: "unconfirmed"` with a "before fees"
+note about bags.
+
+**Gap found in the tool:** called with `adults: 2`, the quote doesn't say whether
+`total_price` is per person or for the whole party. (Comparing with a 1-adult search,
+it's per person.) A firm-price contract needs an explicit `price_basis`
+(`per_person` | `party_total`) and passenger count on every quote.
+
+### Only flights had firm-pricing protection
+
+| Item | How it was priced | Protection |
+|---|---|---|
+| Domestic flights | PdWkend tool (after the fix above) | `FareQuote`, timestamped, before-fees label |
+| Hotels (Hostal America, Pehoé, Weskar) | Booking.com MCP | Live, but no timestamp and no freshness gate |
+| Las Torres tent and meal plans | User's screenshots | None; a human read it off the screen |
+| Rental car | Kayak in the browser | Live, but one-way drop-off fee not confirmed |
+| Park entry, fuel, glacier boat, Awasi | Model memory or arithmetic | None; estimates shown beside quotes |
+
+### What to build
+
+- **Generalize the quote contract beyond fares:** lodging, car, park and activity
+  quotes, each with `fetched_at`, `source_url` and fee rules for their own traps:
+  one-way drop-off fees, minimum stays, per-night price changes (Pehoé was $390 on
+  Jan 3 and $500 on Jan 4), per-person meal plans.
+- **Typed availability results** instead of one "no availability" error:
+  `available`, `sold_out`, `not_listed`, `min_stay_violated`, `not_yet_bookable`.
+- **A third provenance kind between quote and estimate:** `user_provided`, for
+  screenshots and existing bookings, stamped with when the user captured it.
+- **Show provenance in the UI.** Trip page v4 now does this as a prototype:
+  every price carries a Live / From you / Estimate badge and a source, live flight
+  prices show their age and flag "re-check before booking" after 15 minutes (the
+  contracts' `DEFAULT_TTL_MS`), estimates are colored differently, and flights are
+  a separate block below the sub-total before the grand total.
+- **Make the product's own tools the default.** The project prompt or skill should
+  say: for any price, try the PdWkend tool first; browser scraping only when no tool
+  covers the item, and label it.
