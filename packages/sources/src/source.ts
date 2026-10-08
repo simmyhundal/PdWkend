@@ -17,6 +17,8 @@ export interface FareQuery {
   /** YYYY-MM-DD, local to the origin. */
   date: string;
   adults: number;
+  /** ISO-4217 code to price in, for sources that can; each adapter picks its own default. */
+  currency?: string;
   /** Optional filter, local 24h "HH:MM". */
   earliest_departure?: string;
   latest_departure?: string;

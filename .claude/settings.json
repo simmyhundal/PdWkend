@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./sheets-access-*.json)",
+      "Read(./*-credentials.json)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npm run build >/dev/null 2>&1 || echo '{\"systemMessage\": \"npm run build failed - run it to see type errors\"}'",
+            "timeout": 120,
+            "statusMessage": "Rebuilding dist/..."
+          }
+        ]
+      }
+    ]
+  }
+}
