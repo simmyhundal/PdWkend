@@ -267,3 +267,30 @@ it's per person.) A firm-price contract needs an explicit `price_basis`
 - **Make the product's own tools the default.** The project prompt or skill should
   say: for any price, try the PdWkend tool first; browser scraping only when no tool
   covers the item, and label it.
+
+## Addendum: one-shot test (evening of Oct 7)
+
+Goal: produce the final trip page in one pass from a brief alone. Test inputs:
+- 2 adults; Delta lands SCL 07:40 Jan 2; back in Santiago by Jan 5
+- Torres del Paine
+- Lodging under $1K
+- Food, wine, scenery and some adventure
+
+Tools: the PdWkend flight tool and the Booking.com connector only. No traveler screenshots.
+
+Result ([comparison page](https://claude.ai/artifact/VeAMMXg3ecAS19i4vLLATk)):
+- Puerto Natales base for all 3 nights, with no in-park lodging.
+- Car not priced.
+- About 13 h of driving and 13–14 h hike days.
+- Total "≥ $1,851 + car" vs ~$2,524 complete for the iterated plan.
+
+The one-shot looks cheaper only because the car is missing and every night is in town. As a trip it's worse.
+
+Issues filed from the run:
+- **Bugs:** #7 curation collapses nonstops; #8 cabin class not parsed; #9 per-person vs party total.
+- **Enhancements:** #10 trip-brief anchors and feasibility; #11 car source; #12 lodging source with provenance; #13 routing and access modes; #14 one-shot page output (the umbrella issue).
+
+Other changes the same day:
+- The final plan gained a night-one toggle: Santiago airport (recommended; PNT round-trip car at $159) vs Puerto Natales via Punta Arenas.
+- #5 (unpriced flights dropped) was fixed in PR #6.
+- `feature/award-points-4` went up as PR #15.
